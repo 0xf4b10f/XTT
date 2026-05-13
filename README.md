@@ -1,54 +1,123 @@
-# XTT - Extended Attributes Triage
+# XTT - Extended Attributes Triage Tool
 
-A forensic utility for the identification, extraction, and decoding of Extended Attributes (EAs) on Linux and macOS.
+A forensic utility for the identification, extraction, and decoding of Extended Attributes (EAs) on macOS and Linux, purpose-built for DFIR workflows.
+
+---
+
+## What's New in v1.2.2
+
+- **`com.apple.quarantine` parser** — structured decoding of quarantine flags, macOS-epoch timestamp, agent bundle ID, and UUID directly from the EA
+- **Configurable skew threshold** — `--skew-days N` replaces the hardcoded 72-hour window; set it to match your investigation timeline
+- **Hardened terminal sanitization** — all control characters (not just `\x1b`) are neutralized to prevent terminal injection from adversary-controlled EA content
+- **Entropy computed on raw bytes** — entropy now runs before content decoding for accuracy; the old order could distort scores on bplist-decoded values
+- **Architecture refactor** — scan, render, summarize, and export are fully separated functions; easier to extend and test
+- **`--version` flag** added
+- **Skew disclaimer in summary** — the output now explicitly notes that `mtime` reflects file data changes, not EA write time
+
+---
 
 ## Features
-- **Mutually Exclusive Targets:** Choose between single file (`-f`) or recursive directory (`-d`) scans.
-- **No Truncation:** Displays the full content of all attributes.
-- **macOS Plist Support:** Built-in support for macOS Binary Plists (e.g., `WhereFroms`, `Quarantine`).
-- **CSV Reporting:** Export findings to CSV format.
-- **Entropy Analysis (NEW):** Calculates entropy for every attribute to detect encrypted or packed payloads. Attributes with entropy higher than **7.0** (indicating encryption or packing) are automatically highlighted in **RED**.
-- **Time Discrepancy Analysis (NEW)** Compares the file's Modification Time (`mtime`) against current system boundaries. Files modified within a **72-hour window** are highlighted in **YELLOW**.
+
+- **Single file or recursive directory scan** via `-f` / `-d`
+- **Full content visibility** — no truncation; falls back to hex for non-UTF-8 binary EAs
+- **macOS Binary Plist decoding** — handles `com.apple.metadata:kMDItemWhereFroms` and similar bplist EAs
+- **`com.apple.quarantine` structured parsing** — flags, timestamp (converted from macOS epoch), agent name, UUID
+- **Shannon entropy analysis** (`-e`) — highlights EAs with entropy > 7.0 in **RED**
+- **File mtime skew detection** (`-t`) — highlights recently modified files in **YELLOW**; configurable with `--skew-days`
+- **CSV export** (`-w`) with CSV injection prevention
+- **Symlink-safe** — symlinks are skipped at both file and directory level
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/0xf4b10f/XTT.git
+cd XTT
+pip install -r requirements.txt
+```
+
+---
 
 ## Usage
-### See available options
-`python3 xtt.py -h`
 
-<img width="788" height="205" alt="Screenshot 2026-02-01 at 16 07 47" src="https://github.com/user-attachments/assets/42bd03d9-5490-456b-b79c-975861088148" />
+```
+python3 xtt.py [-h] [--version] (-d DIRECTORY | -f FILE) [-e] [-t] [--skew-days N] [-w OUTPUT.csv]
+```
 
+### Options
 
-### Scan a folder recursively
-`python3 xtt.py -d test_dir/`
+| Flag | Description |
+|---|---|
+| `-f FILE` | Scan a single file |
+| `-d DIR` | Recursive directory scan |
+| `-e` | Calculate Shannon entropy per EA |
+| `-t` | Flag files with mtime within threshold (default: 3 days) |
+| `--skew-days N` | Set skew threshold in days (float, default: 3.0) |
+| `-w FILE.csv` | Export results to CSV |
+| `--version` | Show version and exit |
 
-<img width="1202" height="354" alt="image" src="https://github.com/user-attachments/assets/77fff018-b68c-4ce4-9daa-b2e33c880c65" />
+---
+
+## Examples
+
+### Scan a directory recursively
+
+```bash
+python3 xtt.py -d /path/to/dir/
+```
 
 ### Analyze a single file
-`python3 xtt.py -f test.txt`
 
-<img width="1201" height="270" alt="image" src="https://github.com/user-attachments/assets/289aaee2-f847-4864-bda7-6d6c901058cc" />
+```bash
+python3 xtt.py -f suspicious.dmg
+```
 
-### Generate a report
-`python3 xtt.py -d test_dir/ -w report.csv`
+### Entropy analysis — detect encrypted or packed payloads
 
-<img width="1189" height="398" alt="image" src="https://github.com/user-attachments/assets/903c86e6-5b76-4d33-86b3-ca3a6173640a" />
+```bash
+python3 xtt.py -e -d /path/to/dir/
+```
 
-### Entropy analysis (NEW)
-`python3 xtt.py -e -d test_dir/`
-<img width="971" height="338" alt="mac_entropy" src="https://github.com/user-attachments/assets/10ecdcd5-5a27-4193-ac17-1ce31b76d0c0" />
+### Time skew analysis — flag files modified in the last 24 hours
 
-### Time modification analysis (NEW)
-`python3 xtt.py -t -d test_dir/`
-<img width="971" height="338" alt="mac_time" src="https://github.com/user-attachments/assets/062290d0-3b7a-4d00-9358-a14148e514dd" />
+```bash
+python3 xtt.py -t --skew-days 1 -d /path/to/dir/
+```
 
+> **Note:** `mtime` reflects changes to file data, not to extended attributes. EA write time is not exposed by the kernel through standard stat calls. Treat skew alerts as a corroborating signal, not a definitive indicator.
 
-## Entropy Score,Interpretation,Forensic Action
+### Full analysis with report
 
-0.0 - 3.0 (Highly structured / Empty,Likely padding or null bytes.)
+```bash
+python3 xtt.py -e -t --skew-days 2 -d /path/to/dir/ -w report.csv
+```
 
-3.0 - 6.0 (Standard Text / Code,Likely legitimate configuration or scripts)
+---
 
-6.0 - 7.5 (Packed / Obfuscated,Suspicious. Possible packed malware or Base64 blobs)
+## Entropy Reference
 
-7.5 - 8.0 (Encrypted / Compressed,CRITICAL. High probability of hidden payloads or encrypted C2 config)
+| Score | Interpretation | Forensic Action |
+|---|---|---|
+| 0.0 – 3.0 | Highly structured / empty | Likely padding or null bytes |
+| 3.0 – 6.0 | Standard text / code | Likely legitimate configuration |
+| 6.0 – 7.5 | Packed / obfuscated | Suspicious — possible packed payload or Base64 blob |
+| 7.5 – 8.0 | Encrypted / compressed | **Critical** — high probability of hidden payload or encrypted C2 config |
 
+---
 
+## macOS Quarantine EA
+
+When `com.apple.quarantine` is present, XTT decodes it into structured components instead of displaying raw bytes:
+
+```
+[QUARANTINE] flags=USER_APPROVED (0083) | ts=2024-11-14 18:32:01 | agent=com.apple.Safari | uuid=<uuid>
+```
+
+Known quarantine flags decoded: `USER_APPROVED`, `SANDBOXED`, `DOWNLOAD_INCOMPLETE`.
+
+---
+
+## License
+
+MIT — see [LICENSE.txt](LICENSE.txt)
